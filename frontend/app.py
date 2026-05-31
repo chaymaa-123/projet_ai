@@ -14,19 +14,32 @@ st.caption("Prototype Académique - Architecture LangGraph & MCP")
 st.sidebar.header("👤 Profil Patient & Configuration")
 
 # Formulaire d'insertion de patient (XAMPP / MySQL via MCP)
-with st.sidebar.expander("➕ Intégrer un nouveau patient"):
-    new_id = st.text_input("ID Patient", value="PAT-002")
-    new_nom = st.text_input("Nom Complet")
-    new_antecedents = st.text_input("Antécédents (séparés par des virgules)")
-    new_allergies = st.text_input("Allergies")
-    new_traitements = st.text_input("Traitements actuels")
-    
-    if st.button("Enregistrer dans la DB"):
-        if new_nom and new_id:
-            # On envoie les données à notre endpoint pour l'ajouter via le MCP
-            st.success(f"Patient {new_nom} enregistré avec succès !")
-        else:
-            st.error("Le nom et l'ID sont obligatoires.")
+with st.sidebar.expander("➕ Intégrer un nouveau patient", expanded=True):
+    with st.form("form_ajout_patient"):
+        new_id = st.text_input("ID Patient", value="PAT-002")
+        new_nom = st.text_input("Nom Complet")
+        new_antecedents = st.text_input("Antécédents (séparés par des virgules)")
+        new_allergies = st.text_input("Allergies")
+        new_traitements = st.text_input("Traitements actuels")
+        
+        submitted = st.form_submit_button("Enregistrer dans la DB")
+        
+        if submitted:
+            if new_nom and new_id:
+                with st.spinner("Ajout dans la base MySQL (MCP)..."):
+                    try:
+                        res = requests.post(f"{API_URL}/patients/add", json={
+                            "patient_id": new_id,
+                            "nom": new_nom,
+                            "antecedents": new_antecedents,
+                            "allergies": new_allergies,
+                            "traitements": new_traitements
+                        })
+                        st.success(f"Réponse DB : {res.json().get('message', '')}")
+                    except Exception as e:
+                        st.error("Erreur de connexion à l'API.")
+            else:
+                st.error("Le nom et l'ID sont obligatoires.")
 
 # Sélection du patient pour la démo
 patient_selectionne = st.sidebar.selectbox(
@@ -108,13 +121,12 @@ elif st.session_state.status == "en_attente_medecin":
                 st.markdown("### 📋 Synthèse Préliminaire (Générée par l'IA)")
                 st.info(state_data.get("diagnostic_summary", "Aucune synthèse."))
                 st.markdown("### 🛑 Soins Intermédiaires Proposés")
-                st.code(state_data.get("interim_care", "Aucun soin."))
+                st.text(state_data.get("interim_care", "Aucun soin."))
                 
             with col2:
                 st.markdown("### 🩺 Décision du Médecin Senior (Validation Humaine)")
                 prescription = st.text_area(
-                    "Saisissez vos directives thérapeutiques officielles (Validation MCP automatique) :",
-                    value="Amlodipine 5mg (Continuer traitement de fond) + Paracétamol 1g toutes les 6h si douleur unilatérale intense."
+                    "Saisissez vos directives thérapeutiques officielles (Validation MCP automatique) :"
                 )
                 
                 if st.button("🚫 Valider le traitement et relancer le Graphe"):
@@ -146,9 +158,22 @@ elif st.session_state.status == "termine":
     res = requests.get(f"{API_URL}/consultation/{st.session_state.thread_id}/report")
     report_data = res.json()
     
-    st.markdown(report_data.get("final_report", "Rapport introuvable."))
+    final_report_text = report_data.get("final_report", "Rapport introuvable.")
+    st.markdown(final_report_text)
     
-    if st.button("🔄 Commencer une nouvelle consultation patient"):
-        st.session_state.status = "initial"
-        st.session_state.thread_id = None
-        st.rerun()
+    st.divider()
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="💾 Télécharger le rapport médical",
+            data=final_report_text,
+            file_name=f"rapport_medical_{patient_id}.md",
+            mime="text/markdown"
+        )
+        
+    with col2:
+        if st.button("🔄 Commencer une nouvelle consultation patient"):
+            st.session_state.status = "initial"
+            st.session_state.thread_id = None
+            st.rerun()

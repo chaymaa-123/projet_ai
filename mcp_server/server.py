@@ -69,10 +69,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         connection = get_db_connection()
         try:
             with connection.cursor() as cursor:
-                sql = "INSERT INTO patients VALUES (%s, %s, %s, %s, %s)"
-                cursor.execute(sql, (arguments["patient_id"], arguments["nom"], arguments.get("antecedents",""), arguments.get("allergies",""), arguments.get("traitements","")))
+                sql = "INSERT INTO patients (patient_id, nom, antecedents, allergies, traitements) VALUES (%s, %s, %s, %s, %s)"
+                cursor.execute(sql, (
+                    arguments["patient_id"], 
+                    arguments["nom"], 
+                    arguments.get("antecedents",""), 
+                    arguments.get("allergies",""), 
+                    arguments.get("traitements","")
+                ))
             connection.commit()
-            msg = f"Succès : Le patient {arguments['nom']} a été enregistré."
+            msg = f"Succès : Le dossier complet de {arguments['nom']} (Antécédents, Allergies, Traitements) a bien été inséré dans MySQL !"
         except Exception as e:
             msg = f"Erreur MySQL : {e}"
         finally:
@@ -88,7 +94,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             if not p:
                 msg = f"Aucun dossier trouvé pour {arguments['patient_id']}."
             else:
-                msg = f"Dossier Réel MySQL de {p['nom']} :\n- Antécédents : {p['antecedents']}\n- Allergies : {p['allergies']}"
+                msg = f"Dossier Réel MySQL de {p['nom']} :\n- Antécédents : {p['antecedents']}\n- Allergies : {p['allergies']}\n- Traitements : {p['traitements']}"
         except Exception as e:
             msg = f"Erreur : {e}"
         finally:

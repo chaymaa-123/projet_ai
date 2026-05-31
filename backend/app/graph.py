@@ -53,14 +53,26 @@ def diagnostic_agent_node(state: MedicalState):
     Utilise GPT pour poser des questions intelligentes et générer la synthèse clinique.
     """
     current_count = state.get("question_count", 0)
+    patient_id = state.get("patient_id", "PAT-001")
     
-    # Secours local immédiat : simule la lecture de la base MySQL sans bloquer les processus Stdio
+    import asyncio
+    from backend.app.tools.mcp_client import call_mcp_consulter_patient
+    
+    # Secours local si XAMPP est éteint
     infos_patient_local = (
-        "Dossier Patient (MySQL XAMPP) : Jean Dupont (PAT-001)\n"
+        f"Dossier Patient (Profil de Secours) : ({patient_id})\n"
         "- Antécédents : Hypertension artérielle (HTA)\n"
         "- Allergies : Pénicilline\n"
         "- Traitements actuels : Amlodipine 5mg"
     )
+    
+    # APPEL RÉEL À LA BASE DE DONNÉES VIA MCP
+    try:
+        mcp_data = asyncio.run(call_mcp_consulter_patient(patient_id))
+        if "Erreur" not in mcp_data and "Aucun dossier" not in mcp_data:
+            infos_patient_local = f"Dossier Patient depuis MySQL :\n{mcp_data}"
+    except Exception:
+        pass
     
     # Questions par défaut (fallback en cas d'erreur API ou absence de clé)
     questions_default = [
@@ -184,26 +196,23 @@ def diagnostic_agent_node(state: MedicalState):
 def physician_review_node(state: MedicalState):
     """
     Rôle : Nœud de contrôle du médecin (Human-in-the-Loop).
-    Analyse les risques cliniques de manière synchrone et ultra-robuste.
+    Analyse les risques cliniques de manière synchrone via l'outil MCP réel.
     """
-    facteurs_detectes = state.get("diagnostic_summary", "").lower()
-    alertes_securite = []
-
-    # Simulation déterministe immédiate des règles d'autorité médicale (rôle du MCP)
-    if "hta" in facteurs_detectes or "hypertension" in facteurs_detectes:
-        alertes_securite.append("ÉVITER absolument les Anti-Inflammatoires Non Stéroïdiens (AINS) comme l'Ibuprofène (Risque de crise hypertensive majeure).")
-    if "pénicilline" in facteurs_detectes:
-        alertes_securite.append("ALLERGIE GRAVE : Bannir tous les antibiotiques de la famille des Bêta-lactamines.")
-    if "asthme" in facteurs_detectes:
-        alertes_securite.append("🚨 ATTENTION RISQUE CRITIQUE : Contre-indication absolue des Bêta-bloquants.")
+    import asyncio
+    from backend.app.tools.mcp_client import call_mcp_verifier_contre_indications
     
-    if alertes_securite:
-        validation_mcp = "🚨 ALERTE SÉCURITÉ CLINIQUE (Vérification MCP) :\n" + "\n".join(f"- {a}" for a in alertes_securite)
-    else:
-        validation_mcp = "✅ Contrôle de sécurité clinique (MCP) : Aucune contre-indication majeure détectée."
+    facteurs_detectes = state.get("diagnostic_summary", "").lower()
+
+    # VÉRITABLE APPEL AU SERVEUR MCP
+    try:
+        # On exécute la fonction asynchrone du MCP de manière synchrone
+        validation_mcp_brute = asyncio.run(call_mcp_verifier_contre_indications(facteurs_detectes))
+        validation_mcp = f"🛡️ **Vérification MCP** :\n{validation_mcp_brute}"
+    except Exception as e:
+        validation_mcp = f"⚠️ Mode Secours (Le serveur MCP est injoignable) : Aucune contre-indication vérifiée."
 
     # Récupération du traitement saisi par le médecin sur l'interface Streamlit
-    traitement_saisi = state.get("physician_treatment", "Amlodipine 5mg réajusté + Paracétamol 1g pour la douleur.")
+    traitement_saisi = state.get("physician_treatment", "")
     
     return {"physician_treatment": f"{validation_mcp}\n\nPrescription finale validée par le médecin : {traitement_saisi}"}
 
@@ -213,39 +222,59 @@ def report_agent_node(state: MedicalState):
     Rôle : Générer le compte-rendu final au format Markdown.
     Utilise GPT pour rédiger un rapport médical hautement qualitatif et professionnel.
     """
-    diag_sum = state.get('diagnostic_summary')
-    interim = state.get('interim_care')
-    phys_treat = state.get('physician_treatment')
+    diag_sum = state.get('diagnostic_summary', 'Non spécifié')
+    interim = state.get('interim_care', 'Non spécifié')
+    phys_treat = state.get('physician_treatment', 'Non spécifié')
+    patient_id = state.get('patient_id', 'PAT-001')
     
-    compte_rendu = f"""
-# 🏥 FICHE DE SYNTHÈSE CLINIQUE D'ORIENTATION
+    import asyncio
+    from backend.app.tools.mcp_client import call_mcp_consulter_patient
+    try:
+        db_info = asyncio.run(call_mcp_consulter_patient(patient_id))
+    except Exception:
+        db_info = f"Dossier du patient {patient_id}."
+    
+    compte_rendu = f"""# 📄 RAPPORT MÉDICAL D'ORIENTATION ET DE CONSEIL
+*Généré par votre Assistant Médical IA & Validé par un Médecin Senior*
 
-## 👤 Données du Patient & Antécédents (Via Base de Données)
-{diag_sum}
+---
 
-## 🛑 Directives de Soins Intermédiaires (Symptomatiques)
+### 👤 Informations du Dossier Médical
+{db_info}
+
+### 🩺 1. Résumé de vos symptômes
+Voici ce que nous avons retenu de notre échange :
+> {diag_sum}
+
+### 🩹 2. Ce que vous pouvez faire immédiatement
+En attendant que le traitement fasse effet, voici des conseils pratiques pour vous soulager :
 {interim}
 
-## 💊 Plan Thérapeutique Sécurisé (Validation Humaine + Garde-fou MCP)
+### 💊 3. La décision du médecin et votre traitement
+Après révision de votre dossier et vérification stricte de votre sécurité (allergies, contre-indications) :
 {phys_treat}
 
 ---
-*⚠️ Ce système est un outil d'orientation clinique préliminaire académique développé pour la soutenance. Il ne remplace pas une consultation médicale réelle.*
+💡 **Notre conseil** : Ce traitement a été spécialement adapté à votre profil clinique. Si vos symptômes s'aggravent ou persistent au-delà de 48 heures, veuillez consulter physiquement un professionnel de santé ou appeler les urgences.
+
+*⚠️ Avertissement : Ce document est issu d'un outil académique d'orientation. Il ne remplace en aucun cas une véritable consultation médicale.*
 """
     llm = get_llm()
     if llm:
         try:
             system_prompt = (
-                "Vous êtes le Report Agent. Votre rôle est de rédiger une Fiche de Synthèse Clinique d'Orientation "
-                "médicale extrêmement professionnelle, lisible, structurée et rédigée dans un excellent français au format Markdown.\n\n"
-                "Voici les données d'entrée fournies par les autres agents et validées par le médecin senior :\n"
-                f"1. Synthèse clinique et antécédents : {diag_sum}\n"
-                f"2. Directives de soins intermédiaires : {interim}\n"
-                f"3. Décision du médecin (avec alertes de sécurité mcp) : {phys_treat}\n\n"
+                "Vous êtes l'Agent de Rédaction du Rapport Médical. Votre rôle est de rédiger un rapport final destiné au patient.\n"
+                "Le rapport doit être explicatif, pédagogique, détaillé mais facile à lire pour quelqu'un qui n'est pas médecin.\n\n"
+                "Voici les données d'entrée validées par le médecin senior :\n"
+                f"1. Informations de la base de données : {db_info}\n"
+                f"2. Synthèse clinique et symptômes : {diag_sum}\n"
+                f"3. Conseils pratiques de soins : {interim}\n"
+                f"4. Traitement officiel du médecin : {phys_treat}\n\n"
                 "INSTRUCTIONS :\n"
-                "- Mettez en valeur les sections avec des titres clairs et une mise en page soignée (#, ##, listes, caractères gras).\n"
-                "- Structurez de manière clinique et rigoureuse (Dossier, Symptômes, Diagnostic, Contre-indications, Prescription).\n"
-                "- Terminez obligatoirement par l'avertissement de sécurité indiquant que le système ne remplace pas une vraie consultation."
+                "- Adressez-vous directement au patient (utilisez 'vous') et mentionnez son nom s'il est dans les informations de la base de données.\n"
+                "- Expliquez brièvement pourquoi ce traitement a été choisi en fonction de ses symptômes et de son dossier (allergies/antécédents).\n"
+                "- Structurez de manière claire (Votre dossier, Vos symptômes, Premiers gestes, Votre traitement officiel).\n"
+                "- Terminez obligatoirement par un avertissement de sécurité indiquant que le système ne remplace pas une consultation."
             )
             response = llm.invoke([("system", system_prompt)])
             compte_rendu = response.content

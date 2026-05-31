@@ -32,7 +32,27 @@ class ResumeConsultationRequest(BaseModel):
     thread_id: str
     physician_treatment: str
 
+class AddPatientRequest(BaseModel):
+    patient_id: str
+    nom: str
+    antecedents: str
+    allergies: str
+    traitements: str
+
 # --- 🚀 LES ROUTES DE L'API 100% SYNCHRONES ---
+
+@app.post("/patients/add")
+def add_patient_route(req: AddPatientRequest):
+    """Enregistre un patient dans MySQL via le MCP."""
+    import asyncio
+    from backend.app.tools.mcp_client import call_mcp_ajouter_patient
+    try:
+        res = asyncio.run(call_mcp_ajouter_patient(
+            req.patient_id, req.nom, req.antecedents, req.allergies, req.traitements
+        ))
+        return {"status": "success", "message": res}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.post("/sessions/start")
 def start_session(request: StartSessionRequest):
@@ -44,6 +64,7 @@ def start_session(request: StartSessionRequest):
         "patient_id": request.patient_id,
         "status": "en_collecte",
         "state": {
+            "patient_id": request.patient_id,
             "messages": [],
             "question_count": 0,
             "physician_treatment": "",
@@ -81,8 +102,8 @@ def start_consultation(request: StartConsultationRequest):
         # Capture l'interruption de LangGraph avant le médecin sans faire planter l'API
         pass
 
-    # Forçage du passage à l'étape du médecin si le compteur atteint la limite
-    if session["state"].get("question_count", 0) >= 5:
+    # Forçage du passage à l'étape du médecin si le compteur atteint la limite (les 5 questions ont été posées ET répondues)
+    if session["state"].get("question_count", 0) >= 6:
         session["status"] = "en_attente_medecin"
     else:
         session["status"] = "en_collecte"
