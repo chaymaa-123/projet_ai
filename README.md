@@ -63,6 +63,12 @@ class MedicalState(TypedDict, total=False):
 
 ## 🚀 Guide de Démarrage et Lancement
 
+### 0. Prérequis Système
+- **Python 3.10+** installé sur votre machine.
+- **XAMPP ou WAMP** (pour héberger la base de données MySQL locale).
+  - Créez une base de données nommée `cabinet_medical`.
+  - Importez ou créez la table `patients` avec les colonnes `patient_id` (clé primaire), `nom`, `antecedents`, `allergies`, `traitements`.
+
 ### 1. Installation des Dépendances
 Nous vous recommandons de créer un environnement virtuel Python propre.
 
@@ -110,6 +116,16 @@ L'application Streamlit premium sert d'interface graphique de démonstration.
 streamlit run frontend/app.py
 ```
 L'interface s'ouvre automatiquement dans votre navigateur par défaut à l'adresse [http://localhost:8501](http://localhost:8501).
+
+#### Étape D : Tester les agents dans LangGraph Studio (Requis pour la soutenance)
+Le projet est entièrement compatible et testable avec LangGraph Studio.
+```powershell
+# Depuis la racine du projet
+langgraph dev --config backend/langgraph.json
+```
+**Pour visualiser le graphe :**
+1. Utilisez l'application de bureau **LangGraph Studio Desktop** (Recommandé).
+2. *Ou* connectez-vous sur la version Web (LangSmith) et renseignez l'URL de l'API locale (`http://127.0.0.1:2024`). *Note : Si votre navigateur bloque l'accès local par sécurité, vous pouvez exposer le port via un tunnel (ex: `npx localtunnel --port 2024`) et utiliser cette URL publique dans le Studio.*
 
 ---
 

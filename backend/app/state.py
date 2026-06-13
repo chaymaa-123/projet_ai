@@ -16,3 +16,4 @@ class MedicalState(TypedDict, total=False):
     diagnostic_summary: str
     physician_treatment: str
     final_report: str
+    is_urgent: bool

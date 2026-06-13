@@ -47,7 +47,7 @@ def supervisor_node(state: MedicalState):
         return {"next": "FINISH"}
 
 
-def diagnostic_agent_node(state: MedicalState):
+async def diagnostic_agent_node(state: MedicalState):
     """
     Rôle : Recueillir les symptômes et charger le dossier en secours local très stable.
     Utilise GPT pour poser des questions intelligentes et générer la synthèse clinique.
@@ -55,7 +55,6 @@ def diagnostic_agent_node(state: MedicalState):
     current_count = state.get("question_count", 0)
     patient_id = state.get("patient_id", "PAT-001")
     
-    import asyncio
     from backend.app.tools.mcp_client import call_mcp_consulter_patient
     
     # Secours local si XAMPP est éteint
@@ -68,7 +67,7 @@ def diagnostic_agent_node(state: MedicalState):
     
     # APPEL RÉEL À LA BASE DE DONNÉES VIA MCP
     try:
-        mcp_data = asyncio.run(call_mcp_consulter_patient(patient_id))
+        mcp_data = await call_mcp_consulter_patient(patient_id)
         if "Erreur" not in mcp_data and "Aucun dossier" not in mcp_data:
             infos_patient_local = f"Dossier Patient depuis MySQL :\n{mcp_data}"
     except Exception:
@@ -83,8 +82,22 @@ def diagnostic_agent_node(state: MedicalState):
         "Question 5/5 : Vos antécédents d'Hypertension sont-ils stables actuellement ?"
     ]
     
+    # Détection d'urgence (secours déterministe)
+    mots_cles_urgence = ["poitrine", "respirer", "etouffe", "avc", "inconscient", "sang", "paralyse", "cardiaque", "infarctus", "severe", "insupportable", "mortel", "agonie"]
+    dernier_msg_texte = ""
+    for m in reversed(state.get("messages", [])):
+        if hasattr(m, "content"):
+            dernier_msg_texte = m.content.lower()
+            break
+        elif isinstance(m, tuple) and len(m) > 1:
+            dernier_msg_texte = m[1].lower()
+            break
+    
+    est_urgent_secours = any(k in dernier_msg_texte for k in mots_cles_urgence)
+    
     if current_count < 5:
         question_suivante = questions_default[current_count]
+        est_urgent_llm = False
         
         llm = get_llm()
         if llm:
@@ -94,9 +107,11 @@ def diagnostic_agent_node(state: MedicalState):
                     "Votre objectif est d'analyser les symptômes décrits par le patient, son dossier et de lui poser "
                     "une question pertinente (UNE SEULE question claire, directe et empathique à la fois).\n\n"
                     f"--- Dossier Médical du Patient ---\n{infos_patient_local}\n\n"
-                    f"CONSIGNE DE WORKFLOW :\n"
-                    f"Vous devez poser la QUESTION {current_count + 1}/5.\n"
-                    "Adaptez cette question de manière intelligente en fonction des messages précédents."
+                    "CONSIGNE DE SÉCURITÉ CLINIQUE CRITIQUE :\n"
+                    "Si le patient décrit des symptômes d'extrême urgence (ex: douleur thoracique intense, grande difficulté à respirer, signes d'AVC, perte de connaissance, hémorragie sévère, crise hypertensive majeure avec symptômes neurologiques), vous devez OBLIGATOIREMENT interrompre immédiatement le questionnaire et déclarer l'urgence.\n"
+                    "Pour déclarer l'urgence, entourez votre message de la balise <URGENT>. Exemple :\n"
+                    "<URGENT>🚨 ATTENTION : Vos symptômes présentent des signes de gravité immédiate. C'est urgent, veuillez consulter immédiatement un médecin ou vous rendre aux urgences !</URGENT>\n\n"
+                    f"Sinon, vous devez poser la QUESTION {current_count + 1}/5 de manière intelligente en fonction des messages précédents."
                 )
                 
                 # Conversion des messages pour l'historique de discussion
@@ -117,9 +132,23 @@ def diagnostic_agent_node(state: MedicalState):
                 chain = prompt | llm
                 response = chain.invoke({"chat_history": lc_messages})
                 question_suivante = response.content
+                
+                if "<URGENT>" in question_suivante:
+                    est_urgent_llm = True
+                    question_suivante = question_suivante.split("<URGENT>")[1].split("</URGENT>")[0].strip()
             except Exception:
                 pass
         
+        if est_urgent_secours or est_urgent_llm:
+            urgent_msg = "🚨 ATTENTION : Vos symptômes présentent des signes de gravité immédiate. C'est urgent, veuillez consulter immédiatement un médecin ou vous rendre aux urgences !" if not llm or not est_urgent_llm else question_suivante
+            return {
+                "messages": [("assistant", urgent_msg)],
+                "question_count": 6, # Force l'interruption immédiate du graphe vers le médecin
+                "diagnostic_summary": f"🚨 CAS D'URGENCE EXTRÊME DÉTECTÉ : {dernier_msg_texte or 'Symptômes sévères signalés.'}",
+                "interim_care": "⚠️ URGENCE MÉDICALE IMMÉDIATE. Veuillez contacter les secours ou vous diriger vers le service d'urgence le plus proche.",
+                "is_urgent": True
+            }
+            
         payload = {
             "messages": [("assistant", question_suivante)], 
             "question_count": current_count + 1
@@ -193,20 +222,19 @@ def diagnostic_agent_node(state: MedicalState):
         }
 
 
-def physician_review_node(state: MedicalState):
+async def physician_review_node(state: MedicalState):
     """
     Rôle : Nœud de contrôle du médecin (Human-in-the-Loop).
     Analyse les risques cliniques de manière synchrone via l'outil MCP réel.
     """
-    import asyncio
     from backend.app.tools.mcp_client import call_mcp_verifier_contre_indications
     
     facteurs_detectes = state.get("diagnostic_summary", "").lower()
-
+ 
     # VÉRITABLE APPEL AU SERVEUR MCP
     try:
-        # On exécute la fonction asynchrone du MCP de manière synchrone
-        validation_mcp_brute = asyncio.run(call_mcp_verifier_contre_indications(facteurs_detectes))
+        # On exécute la fonction asynchrone du MCP de manière non bloquante
+        validation_mcp_brute = await call_mcp_verifier_contre_indications(facteurs_detectes)
         validation_mcp = f"🛡️ **Vérification MCP** :\n{validation_mcp_brute}"
     except Exception as e:
         validation_mcp = f"⚠️ Mode Secours (Le serveur MCP est injoignable) : Aucune contre-indication vérifiée."
@@ -217,7 +245,7 @@ def physician_review_node(state: MedicalState):
     return {"physician_treatment": f"{validation_mcp}\n\nPrescription finale validée par le médecin : {traitement_saisi}"}
 
 
-def report_agent_node(state: MedicalState):
+async def report_agent_node(state: MedicalState):
     """
     Rôle : Générer le compte-rendu final au format Markdown.
     Utilise GPT pour rédiger un rapport médical hautement qualitatif et professionnel.
@@ -227,10 +255,9 @@ def report_agent_node(state: MedicalState):
     phys_treat = state.get('physician_treatment', 'Non spécifié')
     patient_id = state.get('patient_id', 'PAT-001')
     
-    import asyncio
     from backend.app.tools.mcp_client import call_mcp_consulter_patient
     try:
-        db_info = asyncio.run(call_mcp_consulter_patient(patient_id))
+        db_info = await call_mcp_consulter_patient(patient_id)
     except Exception:
         db_info = f"Dossier du patient {patient_id}."
     
@@ -259,6 +286,17 @@ Après révision de votre dossier et vérification stricte de votre sécurité (
 
 *⚠️ Avertissement : Ce document est issu d'un outil académique d'orientation. Il ne remplace en aucun cas une véritable consultation médicale.*
 """
+    
+    if state.get("is_urgent", False):
+        compte_rendu = f"""# 🚨 ATTENTION : PARTEZ CHEZ LE MÉDECIN, C'EST UN CAS EXTRÊME !
+
+⚠️ **URGENCE MÉDICALE ABSOLUE DÉTECTÉE**
+Veuillez vous diriger immédiatement vers le cabinet médical le plus proche ou appeler les urgences (le 15 ou le 112).
+
+---
+
+{compte_rendu}"""
+
     llm = get_llm()
     if llm:
         try:
@@ -276,8 +314,15 @@ Après révision de votre dossier et vérification stricte de votre sécurité (
                 "- Structurez de manière claire (Votre dossier, Vos symptômes, Premiers gestes, Votre traitement officiel).\n"
                 "- Terminez obligatoirement par un avertissement de sécurité indiquant que le système ne remplace pas une consultation."
             )
+            if state.get("is_urgent", False):
+                system_prompt += "\n- CRITIQUE : Ce patient est dans un état d'urgence extrême. Vous DEVEZ absolument commencer le rapport par le message exact suivant en gras : '🚨 ATTENTION : PARTEZ CHEZ LE MÉDECIN, C'EST UN CAS EXTRÊME !' et lui intimer l'ordre de consulter sur-le-champ."
+                
             response = llm.invoke([("system", system_prompt)])
             compte_rendu = response.content
+            
+            # Garanti que l'en-tête d'urgence est toujours présent en haut du rapport généré par le LLM
+            if state.get("is_urgent", False) and "PARTEZ CHEZ LE MÉDECIN" not in compte_rendu:
+                compte_rendu = f"# 🚨 ATTENTION : PARTEZ CHEZ LE MÉDECIN, C'EST UN CAS EXTRÊME !\n\n⚠️ **URGENCE MÉDICALE IMMÉDIATE**\n\n" + compte_rendu
         except Exception:
             pass
             

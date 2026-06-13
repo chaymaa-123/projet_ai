@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "medical_graph": "./app/graph.py:graph"
+    "clinical_workflow": "./backend/app/graph.py:graph"
   },
-  "env": "../.env"
+  "env": ".env"
 }

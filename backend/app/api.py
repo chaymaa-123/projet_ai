@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Importation de notre graphe synchrone et de la structure d'état
+from langchain_core.messages import HumanMessage
 from backend.app.graph import graph
 
 app = FastAPI(title="API d'Orientation Clinique Multi-Agents", version="1.0")
@@ -54,6 +55,24 @@ def add_patient_route(req: AddPatientRequest):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/patients")
+def list_patients_route():
+    """Récupère la liste de tous les patients depuis la base de données via MCP."""
+    import asyncio
+    import json
+    from backend.app.tools.mcp_client import call_mcp_lister_patients
+    try:
+        res = asyncio.run(call_mcp_lister_patients())
+        patients = json.loads(res)
+        return patients
+    except Exception as e:
+        # Fallback stable
+        return [
+            {"patient_id": "PAT-001", "nom": "Jean Dupont"},
+            {"patient_id": "PAT-002", "nom": "Chaymaa Alami"},
+            {"patient_id": "PAT-003", "nom": "Youssef Benani"}
+        ]
+
 @app.post("/sessions/start")
 def start_session(request: StartSessionRequest):
     """
@@ -70,14 +89,15 @@ def start_session(request: StartSessionRequest):
             "physician_treatment": "",
             "final_report": "",
             "diagnostic_summary": "",
-            "interim_care": ""
+            "interim_care": "",
+            "is_urgent": False
         }
     }
     return {"thread_id": thread_id, "patient_id": request.patient_id, "status": "Initialisé"}
 
 
 @app.post("/consultation/start")
-def start_consultation(request: StartConsultationRequest):
+async def start_consultation(request: StartConsultationRequest):
     """
     Exécute le graphe de manière déterministe et isole l'état pour éviter les crashs d'interruption.
     """
@@ -87,8 +107,8 @@ def start_consultation(request: StartConsultationRequest):
     session = SESSIONS[request.thread_id]
     current_medical_state = session["state"]
     
-    # Ajout du message de l'utilisateur dans l'historique
-    current_medical_state["messages"].append(("user", request.message))
+    # Ajout du message de l'utilisateur dans l'historique sous forme de HumanMessage
+    current_medical_state["messages"].append(HumanMessage(content=request.message))
     
     try:
         # Configuration bidon pour satisfaire la signature du graphe compille
@@ -96,14 +116,14 @@ def start_consultation(request: StartConsultationRequest):
         
         # Lancement du graphe de manière synchrone
         # On passe l'état actuel et on récupère le dictionnaire modifié en sortie
-        output = graph.invoke(current_medical_state, config=config)
+        output = await graph.ainvoke(current_medical_state, config=config)
         session["state"].update(output)
-    except Exception:
+    except Exception as e:
         # Capture l'interruption de LangGraph avant le médecin sans faire planter l'API
-        pass
+        print(f"Erreur d'invocation du graphe: {e}")
 
-    # Forçage du passage à l'étape du médecin si le compteur atteint la limite (les 5 questions ont été posées ET répondues)
-    if session["state"].get("question_count", 0) >= 6:
+    # Forçage du passage à l'étape du médecin si le compteur atteint la limite ou si c'est un cas urgent
+    if session["state"].get("question_count", 0) >= 6 or session["state"].get("is_urgent", False):
         session["status"] = "en_attente_medecin"
     else:
         session["status"] = "en_collecte"
@@ -118,7 +138,7 @@ def start_consultation(request: StartConsultationRequest):
 
 
 @app.post("/consultation/resume")
-def resume_consultation(request: ResumeConsultationRequest):
+async def resume_consultation(request: ResumeConsultationRequest):
     """
     Injecte la décision du médecin et finalise le rapport.
     """
@@ -133,10 +153,10 @@ def resume_consultation(request: ResumeConsultationRequest):
     try:
         config = {"configurable": {"thread_id": request.thread_id}}
         # Relance le graphe pour exécuter les nœuds restants (Report Agent)
-        output = graph.invoke(session["state"], config=config)
+        output = await graph.ainvoke(session["state"], config=config)
         session["state"].update(output)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Erreur de reprise du graphe: {e}")
         
     session["status"] = "termine"
     return {"message": "Consultation terminée."}
@@ -168,6 +188,7 @@ def get_consultation_state(thread_id: str):
         "diagnostic_summary": state.get("diagnostic_summary", ""),
         "interim_care": state.get("interim_care", ""),
         "physician_treatment": state.get("physician_treatment", ""),
+        "is_urgent": state.get("is_urgent", False),
         "messages_history": history
     }
 

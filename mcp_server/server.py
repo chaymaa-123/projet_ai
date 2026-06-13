@@ -60,12 +60,48 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {"facteurs_risque": {"type": "string"}},
                 "required": ["facteurs_risque"]
             }
+        ),
+        types.Tool(
+            name="lister_patients",
+            description="Retourne la liste de tous les patients enregistrés dans MySQL",
+            inputSchema={"type": "object", "properties": {}}
         )
     ]
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    if name == "ajouter_nouveau_patient":
+    if name == "lister_patients":
+        try:
+            connection = get_db_connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT patient_id, nom FROM patients")
+                    patients = cursor.fetchall()
+                import json
+                msg = json.dumps(patients)
+            except Exception as e:
+                # Fallback list if DB connection or query fails
+                patients = [
+                    {"patient_id": "PAT-001", "nom": "Jean Dupont"},
+                    {"patient_id": "PAT-002", "nom": "Chaymaa Alami"},
+                    {"patient_id": "PAT-003", "nom": "Youssef Benani"}
+                ]
+                import json
+                msg = json.dumps(patients)
+            finally:
+                connection.close()
+        except Exception:
+            # Fallback if connection fails completely
+            patients = [
+                {"patient_id": "PAT-001", "nom": "Jean Dupont"},
+                {"patient_id": "PAT-002", "nom": "Chaymaa Alami"},
+                {"patient_id": "PAT-003", "nom": "Youssef Benani"}
+            ]
+            import json
+            msg = json.dumps(patients)
+        return [types.TextContent(type="text", text=msg)]
+
+    elif name == "ajouter_nouveau_patient":
         connection = get_db_connection()
         try:
             with connection.cursor() as cursor:

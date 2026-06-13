@@ -58,3 +58,6 @@ async def call_mcp_ajouter_patient(patient_id: str, nom: str, antecedents: str, 
         "allergies": allergies,
         "traitements": traitements
     })
+
+async def call_mcp_lister_patients() -> str:
+    return await call_mcp_tool("lister_patients", {})
